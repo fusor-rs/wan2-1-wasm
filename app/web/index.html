@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wan2.1 · text to video in your browser</title>
+  <meta name="description" content="Wan2.1-T2V-1.3B, a text-to-video diffusion model, running on this device's CPU, compiled to WebAssembly with fusor-ai. Your prompt never leaves the page.">
+  <link rel="icon" href="/brand/wan2-1.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/base.css">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <App state="{{ App::new() }}">
+    <script type="module" src="./app.js"></script>
+    <main on:engine="state.receive(event)" data-phase="{{ state.phase.get().name() }}" data-loaded="{{ state.loaded.get().is_some() }}">
+      <header class="masthead">
+        <div class="lockup">
+          <img src="/brand/fusor-ai.svg" alt="fusor-ai" width="40" height="40">
+          <span class="times" aria-hidden="true">×</span>
+          <img src="/brand/wan2-1.svg" alt="" width="36" height="36">
+          <span class="wordmark">Wan2.1</span>
+        </div>
+        <h1>Text to video, rendered on your own CPU</h1>
+        <p class="lede">Wan2.1-T2V-1.3B, Alibaba's open text-to-video model, compiled to WebAssembly with fusor-ai. Describe a scene and watch the first frame form step by step, then the clip plays in a loop. Once loaded, nothing you type leaves the page.</p>
+      </header>
+
+      <If condition="{{ state.phase.get() == Phase::Loading }}">
+        <section class="card loading" aria-live="polite">
+          <div class="row"><strong>Loading the model</strong><span id="detail" class="muted">{{ state.detail.get() }}</span></div>
+          <progress max="1" value="{{ state.fraction.get() }}"></progress>
+        </section>
+      </If>
+
+      <If condition="{{ state.phase.get() == Phase::Broken }}">
+        <section class="card broken" role="alert">
+          <strong>{{ if state.failed_to_load() { "The model could not load" } else { "The engine stopped" } }}</strong>
+          <p id="detail">{{ state.detail.get() }}</p>
+          <If condition="{{ state.failed_to_load() }}">
+            <p class="muted">A bundle loads only into the runtime built with it. If you built this page yourself, rebuild both with <code>just ui</code>.</p>
+          </If>
+          <div class="row"><a id="reload" class="control primary" href="">Reload</a></div>
+        </section>
+      </If>
+
+      <section class="card compose">
+        <label for="prompt">Prompt</label>
+        <textarea id="prompt" class="field" rows="3" maxlength="1000" bind="state.prompt"></textarea>
+
+        <label for="negative">Negative prompt</label>
+        <textarea id="negative" class="field negative" rows="2" maxlength="2000" placeholder="What the video should not show" bind="state.negative"></textarea>
+
+        <fieldset>
+          <legend>Size</legend>
+          <div class="sizes">
+            <ForEach items="{{ state.sizes() }}" key="{{ |size| size.id.clone() }}">
+              <label class="size"><input type="radio" name="size" value="{{ item.get().id }}" bind="state.size.clone()"><span><strong>{{ item.get().label }}</strong><small>{{ item.get().dimensions }}</small></span></label>
+            </ForEach>
+          </div>
+        </fieldset>
+
+        <div class="knobs">
+          <div class="knob">
+            <label for="frames">Frames <output>{{ format!("{}", state.frames.get()) }}</output></label>
+            <input id="frames" type="range" min="1" max="33" step="8" bind="state.frames">
+          </div>
+          <div class="knob">
+            <label for="steps">Steps <output>{{ format!("{}", state.steps.get()) }}</output></label>
+            <input id="steps" type="range" min="4" max="50" step="1" bind="state.steps">
+          </div>
+          <div class="knob">
+            <label for="guidance">Guidance <output>{{ format!("{:.1}", state.guidance.get()) }}</output></label>
+            <input id="guidance" type="range" min="1" max="12" step="0.5" bind="state.guidance">
+          </div>
+          <div class="knob">
+            <label for="shift">Shift <output>{{ format!("{:.1}", state.shift.get()) }}</output></label>
+            <input id="shift" type="range" min="1" max="12" step="0.5" bind="state.shift">
+          </div>
+          <div class="knob">
+            <label for="seed">Seed</label>
+            <input id="seed" class="field mono" type="text" inputmode="numeric" spellcheck="false" bind="state.seed">
+          </div>
+        </div>
+
+        <div class="row">
+          <button id="generate" type="button" class="control primary" disabled="{{ !state.can_generate() }}" on:click="state.generate()">{{ state.generate_label() }}</button>
+          <button id="stop" type="button" class="control" disabled="{{ !state.can_stop() }}" on:click="state.stop()">Stop</button>
+          <span id="status" class="muted" aria-live="polite">{{ state.status.get() }}</span>
+        </div>
+      </section>
+
+      <If condition="{{ state.measured.get() }}">
+        <section class="card live" data-done="{{ state.video.get().is_some() }}">
+          <div class="frame" style="{{ state.aspect() }}">
+            <canvas id="picture" aria-label="The video, as it forms"></canvas>
+          </div>
+          <progress id="steps-done" max="{{ state.metrics.get().steps.max(1) }}" value="{{ state.metrics.get().step }}"></progress>
+          <Match value="{{ state.video.get() }}">
+            <Case pattern="Some(url)">
+              <div class="row player">
+                <button id="play" type="button" class="control" on:click="state.toggle_playing()">{{ state.play_label() }}</button>
+                <input id="frame" type="range" min="0" max="{{ state.last_frame() }}" step="1" aria-label="Frame" bind="state.frame.clone()" on:input="state.scrub()">
+                <a id="download" class="control" download="wan2-1.webm" href="{{ url.get() }}">Download WebM</a>
+              </div>
+            </Case>
+            <Case pattern="None"></Case>
+          </Match>
+          <dl class="metrics">
+            <div><dt>Time</dt><dd id="time">{{ state.metrics.get().time() }}</dd><dd class="muted">{{ state.metrics.get().compute() }}</dd></div>
+            <div><dt>Per step</dt><dd id="per-step">{{ state.metrics.get().per_step() }}</dd><dd class="muted">{{ state.metrics.get().decode() }}</dd></div>
+            <div><dt>Steps</dt><dd id="steps-count">{{ state.metrics.get().steps() }}</dd><dd class="muted">{{ format!("DPM++ 2M, shift {:.1}", state.shift.get()) }}</dd></div>
+            <div><dt>Video</dt><dd id="size">{{ state.metrics.get().video() }}</dd><dd class="muted">{{ format!("{} fps", state.metrics.get().fps) }}</dd></div>
+            <div><dt>Network</dt><dd id="requests">{{ state.metrics.get().requests() }}</dd><dd class="muted">requests since the model loaded</dd></div>
+          </dl>
+        </section>
+      </If>
+
+      <footer class="muted">
+        <span id="runtime">{{ state.summary() }}</span>
+        <span>Built with <a href="https://github.com/fusor-rs/fusor-ai">fusor-ai</a> and <a href="https://fusor.build">fusor</a> · model: <a href="https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B">Wan2.1-T2V-1.3B</a> by Wan-AI (Apache-2.0) · <a href="https://github.com/fusor-rs/wan2-1-wasm">source</a></span>
+      </footer>
+    </main>
+  </App>
+</body>
+</html>
